@@ -20,6 +20,12 @@
         <img src="{{ processed_url }}" alt="processed image" />
       </div>
 
+      <div class="meta">
+        {% if detected_type %}
+        <p><strong>Detected shape:</strong> {{ detected_type }}</p>
+        {% endif %}
+      </div>
+
       <form action="/feedback" method="post" class="feedback">
         <input type="hidden" name="uid" value="{{ uid }}" />
         <label>Was that a UAV?</label>

@@ -9,14 +9,20 @@ from flask import Flask, request, redirect, url_for, render_template, send_from_
 from werkzeug.utils import secure_filename
 import cv2
 import numpy as np
+import math
+import joblib
+from skimage.feature import hog
+from skimage import color
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 PROCESSED_FOLDER = os.path.join(BASE_DIR, 'processed')
 DB_PATH = os.path.join(BASE_DIR, 'data.db')
+MODEL_FILE = os.path.join(BASE_DIR, 'models', 'model.pkl')
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(PROCESSED_FOLDER, exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, 'models'), exist_ok=True)
 
 ALLOWED_EXT = {'png', 'jpg', 'jpeg', 'bmp', 'gif'}
 
@@ -108,15 +114,66 @@ def detect_shapes_and_draw(img_path, out_path):
                 cx = int(M['m10'] / M['m00'])
                 cy = int(M['m01'] / M['m00'])
 
-            # scoring: area, solidity (prefer solid shapes), extent, location (upper half favored)
-            score = area * (0.8 + 0.4 * solidity) * (0.8 + 0.4 * extent)
+            # color contrast: compare mean LAB color inside contour vs outside bbox
+            mask = np.zeros((h, w), dtype=np.uint8)
+            cv2.drawContours(mask, [approx], -1, 255, -1)
+            # convert to LAB
+            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+            mean_in = cv2.mean(lab, mask=mask)[:3]
+            # outside: bounding box area excluding mask
+            x1 = x
+            y1 = y
+            x2 = min(w, x + cw)
+            y2 = min(h, y + ch)
+            roi = lab[y1:y2, x1:x2]
+            mask_roi = mask[y1:y2, x1:x2]
+            if roi.size == 0:
+                mean_out = mean_in
+            else:
+                inv_mask = cv2.bitwise_not(mask_roi)
+                mean_out = cv2.mean(roi, mask=inv_mask)[:3]
+            # perceptual distance in LAB
+            color_contrast = math.sqrt(sum((mean_in[i] - mean_out[i]) ** 2 for i in range(3)))
+
+            # scoring: area, solidity (prefer solid shapes), extent, color contrast, location
+            score = area * (0.8 + 0.4 * solidity) * (0.8 + 0.4 * extent) * (1.0 + color_contrast / 50.0)
             if cy < h * 0.6:
                 score *= 1.25
-            # further boost if inside sky mask region
             if sky_mask[cy, min(max(cx, 0), w - 1)] > 0:
-                score *= 1.3
+                score *= 1.2
 
-            candidates.append({'pts': pts.tolist(), 'area': area, 'center': (cx, cy), 'score': score, 'sides': len(pts), 'solidity': solidity, 'extent': extent, 'bbox': [x, y, cw, ch]})
+            # propeller detection: look for multiple short lines radiating from center
+            propeller_score = 0.0
+            try:
+                pad = int(max(cw, ch) * 0.9)
+                sx = max(0, cx - pad)
+                sy = max(0, cy - pad)
+                ex = min(w, cx + pad)
+                ey = min(h, cy + pad)
+                window = edges_skied[sy:ey, sx:ex]
+                # detect lines
+                lines = cv2.HoughLinesP(window, 1, np.pi / 180, threshold=30, minLineLength=8, maxLineGap=6)
+                if lines is not None:
+                    angles = []
+                    for l in lines:
+                        x3, y3, x4, y4 = l[0]
+                        # transform to image coords
+                        mx = (x3 + x4) / 2 + sx
+                        my = (y3 + y4) / 2 + sy
+                        # distance from center
+                        dist = math.hypot(mx - cx, my - cy)
+                        if dist > max(cw, ch) * 1.2:
+                            continue
+                        angle = math.degrees(math.atan2((y4 - y3), (x4 - x3)))
+                        angles.append(angle)
+                    if angles:
+                        # cluster unique angles (quantize)
+                        q = set(int(a / 20.0) for a in angles)
+                        propeller_score = len(q)
+            except Exception:
+                propeller_score = 0.0
+
+            candidates.append({'pts': pts.tolist(), 'area': area, 'center': (cx, cy), 'score': score, 'sides': len(pts), 'solidity': solidity, 'extent': extent, 'bbox': [x, y, cw, ch], 'color_contrast': color_contrast, 'propeller_score': propeller_score})
 
     detected = False
     chosen = None
@@ -136,6 +193,23 @@ def detect_shapes_and_draw(img_path, out_path):
         cx, cy = chosen['center']
         cv2.circle(orig, (cx, cy), 6, (0, 0, 255), -1)
         cv2.drawMarker(orig, (cx, cy), (255, 0, 0), markerType=cv2.MARKER_CROSS, markerSize=12, thickness=2)
+        # classify final shape
+        shape_type = 'unknown'
+        if chosen.get('propeller_score', 0) >= 3:
+            shape_type = 'propeller'
+        elif chosen.get('sides') == 3:
+            shape_type = 'triangle'
+        elif chosen.get('sides') == 4:
+            # aspect
+            bx, by, bw, bh = chosen.get('bbox', [0, 0, 0, 0])
+            ar = float(bw) / bh if bh > 0 else 0
+            if ar < 0.6 or ar > 1.7:
+                shape_type = 'rectangle'
+            else:
+                shape_type = 'quadrilateral'
+        # draw label
+        label = f"{shape_type} ({chosen.get('score'):.0f})"
+        cv2.putText(orig, label, (max(5, cx - 20), max(20, cy - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
     if not detected:
         cv2.putText(orig, 'No UAV-like triangular/trapezoid shapes found', (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
@@ -144,7 +218,7 @@ def detect_shapes_and_draw(img_path, out_path):
 
     shapes_json = json.dumps(candidates)
     center = chosen['center'] if chosen else (None, None)
-    return detected, shapes_json, center
+    return detected, shapes_json, center, chosen
 
 
 def image_file_to_data_uri(img_path):
@@ -154,6 +228,27 @@ def image_file_to_data_uri(img_path):
     _, buf = cv2.imencode('.' + ext, img)
     b64 = base64.b64encode(buf).decode('ascii')
     return f'data:image/{ext};base64,{b64}'
+
+def load_model():
+    if os.path.exists(MODEL_FILE):
+        try:
+            return joblib.load(MODEL_FILE)
+        except Exception:
+            return None
+    return None
+
+MODEL = load_model()
+
+def extract_hog_from_image(path, pixels=128):
+    img = cv2.imread(path)
+    if img is None:
+        return None
+    if img.ndim == 3:
+        img = color.rgb2gray(img[:, :, ::-1])
+    from skimage.transform import resize
+    img = resize(img, (pixels, pixels), anti_aliasing=True)
+    feat = hog(img, pixels_per_cell=(16,16), cells_per_block=(2,2), visualize=False, feature_vector=True)
+    return feat
 
 
 @app.route('/')
@@ -180,9 +275,8 @@ def upload():
 
         processed_name = f"{uid}_processed.{ext}"
         processed_path = os.path.join(app.config['PROCESSED_FOLDER'], processed_name)
-
         try:
-            detected, shapes_json, center = detect_shapes_and_draw(save_path, processed_path)
+            detected, shapes_json, center, chosen = detect_shapes_and_draw(save_path, processed_path)
         except Exception as e:
             flash(f'Processing error: {e}')
             return redirect(url_for('index'))
@@ -194,7 +288,29 @@ def upload():
         conn.commit()
         conn.close()
 
-        return render_template('index.html', processed_url=url_for('processed_file', filename=processed_name), detected=detected, uid=uid)
+        detected_type = chosen.get('shape_type') if chosen and 'shape_type' in chosen else None
+        # chosen may not have shape_type; compute from chosen heuristic
+        if detected and not detected_type:
+            if chosen.get('propeller_score', 0) >= 3:
+                detected_type = 'propeller'
+            elif chosen.get('sides') == 3:
+                detected_type = 'triangle'
+            elif chosen.get('sides') == 4:
+                detected_type = 'rectangle'
+
+        # if we have an ML model, run it and override detected_type with model prediction probability
+        if MODEL is not None:
+            feat = extract_hog_from_image(processed_path)
+            if feat is not None:
+                try:
+                    pred = MODEL.predict([feat])[0]
+                    prob = MODEL.predict_proba([feat])[0]
+                    # pred: 1 -> UAV, 0 -> not UAV
+                    if pred == 1:
+                        detected_type = 'uav_model'
+                except Exception:
+                    pass
+        return render_template('index.html', processed_url=url_for('processed_file', filename=processed_name), detected=detected, uid=uid, detected_type=detected_type)
     else:
         flash('File type not allowed')
         return redirect(url_for('index'))
@@ -203,6 +319,19 @@ def upload():
 @app.route('/processed/<path:filename>')
 def processed_file(filename):
     return send_from_directory(app.config['PROCESSED_FOLDER'], filename)
+
+
+@app.route('/dashboard')
+def dashboard():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT id, filename, processed_path, detected, feedback FROM uploads ORDER BY created_at DESC LIMIT 200')
+    rows = c.fetchall()
+    conn.close()
+    uploads = []
+    for r in rows:
+        uploads.append({'id': r[0], 'filename': r[1], 'processed_path': r[2], 'detected': bool(r[3]), 'feedback': r[4]})
+    return render_template('dashboard.html', uploads=uploads)
 
 
 @app.route('/api/detect', methods=['POST'])
@@ -227,7 +356,7 @@ def api_detect():
     processed_path = os.path.join(app.config['PROCESSED_FOLDER'], processed_name)
 
     try:
-        detected, shapes_json, center = detect_shapes_and_draw(save_path, processed_path)
+        detected, shapes_json, center, chosen = detect_shapes_and_draw(save_path, processed_path)
     except Exception as e:
         return {'error': f'processing error: {e}'}, 500
 
@@ -240,7 +369,27 @@ def api_detect():
     conn.close()
 
     data_uri = image_file_to_data_uri(processed_path)
-    return {'id': uid, 'detected': bool(detected), 'center': {'x': center[0], 'y': center[1]}, 'shapes': json.loads(shapes_json), 'image_data_uri': data_uri}
+    detected_type = None
+    if chosen:
+        if chosen.get('propeller_score', 0) >= 3:
+            detected_type = 'propeller'
+        elif chosen.get('sides') == 3:
+            detected_type = 'triangle'
+        elif chosen.get('sides') == 4:
+            detected_type = 'rectangle'
+
+    # model prediction if available
+    model_pred = None
+    if MODEL is not None:
+        feat = extract_hog_from_image(processed_path)
+        if feat is not None:
+            try:
+                p = MODEL.predict([feat])[0]
+                model_pred = int(p)
+            except Exception:
+                model_pred = None
+
+    return {'id': uid, 'detected': bool(detected), 'detected_type': detected_type, 'model_pred': model_pred, 'center': {'x': center[0], 'y': center[1]}, 'shapes': json.loads(shapes_json), 'image_data_uri': data_uri}
 
 
 @app.route('/feedback', methods=['POST'])
