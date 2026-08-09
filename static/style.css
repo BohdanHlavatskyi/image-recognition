@@ -1,0 +1,8 @@
+body{font-family:Arial,Helvetica,sans-serif;background:#f7f7f7;color:#222}
+.container{max-width:820px;margin:36px auto;padding:24px;background:#fff;border-radius:8px;box-shadow:0 3px 10px rgba(0,0,0,0.08)}
+h1{margin-top:0}
+form{margin:12px 0}
+.result img{max-width:100%;height:auto;border:1px solid #ddd}
+.feedback{margin-top:8px}
+.feedback button{margin-right:8px}
+.note{color:#666;font-size:0.9rem}
