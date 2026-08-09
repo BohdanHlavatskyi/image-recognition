@@ -19,6 +19,8 @@ UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 PROCESSED_FOLDER = os.path.join(BASE_DIR, 'processed')
 DB_PATH = os.path.join(BASE_DIR, 'data.db')
 MODEL_FILE = os.path.join(BASE_DIR, 'models', 'model.pkl')
+CLF_FILE = os.path.join(BASE_DIR, 'models', 'clf.pkl')
+REG_FILE = os.path.join(BASE_DIR, 'models', 'reg.pkl')
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(PROCESSED_FOLDER, exist_ok=True)
@@ -178,9 +180,35 @@ def detect_shapes_and_draw(img_path, out_path):
     detected = False
     chosen = None
     if candidates:
-        candidates.sort(key=lambda x: x['score'], reverse=True)
+        # If we have ML models, compute HOG for each bbox and get probability
+        for cand in candidates:
+            bx, by, bw, bh = cand['bbox']
+            try:
+                crop = img[by:by + bh, bx:bx + bw]
+                feat = extract_hog_from_image(crop if isinstance(crop, str) else crop)
+            except Exception:
+                feat = None
+            cand['uav_prob'] = 0.0
+            cand['refined_center'] = cand['center']
+            if feat is not None and CLF is not None:
+                try:
+                    prob = CLF.predict_proba([feat])[0]
+                    # assume positive class at index 1
+                    cand['uav_prob'] = float(prob[1]) if len(prob) > 1 else float(prob[0])
+                    if REG is not None and cand['uav_prob'] > 0.5:
+                        pred = REG.predict([feat])[0]
+                        # pred is (dx, dy) normalized in bbox coords
+                        dx, dy = float(pred[0]), float(pred[1])
+                        rcx = int(bx + dx * bw)
+                        rcy = int(by + dy * bh)
+                        cand['refined_center'] = (rcx, rcy)
+                except Exception:
+                    pass
+
+        # combine heuristic score with model probability
+        candidates.sort(key=lambda x: (x.get('uav_prob', 0.0) * 2.0 + x['score']), reverse=True)
         chosen = candidates[0]
-        detected = True
+        detected = True if chosen.get('uav_prob', 0.0) > 0.25 or chosen['score'] > 1000 else False
 
     # Draw all candidate polygons (light) and chosen in bright color
     for cand in candidates:
@@ -211,6 +239,29 @@ def detect_shapes_and_draw(img_path, out_path):
         label = f"{shape_type} ({chosen.get('score'):.0f})"
         cv2.putText(orig, label, (max(5, cx - 20), max(20, cy - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
+    # If YOLO model exists, run detection and draw boxes/centers as stronger signal
+    if YOLO_MODEL is not None:
+        try:
+            res = YOLO_MODEL.predict(img_path, imgsz=640, conf=0.25, verbose=False)
+            for r in res:
+                boxes = getattr(r, 'boxes', None)
+                if boxes is None:
+                    continue
+                for b in boxes:
+                    try:
+                        xyxy = b.xyxy[0].tolist()
+                    except Exception:
+                        continue
+                    conf = float(b.conf[0]) if hasattr(b, 'conf') else 0.0
+                    x1, y1, x2, y2 = map(int, xyxy)
+                    cv2.rectangle(orig, (x1, y1), (x2, y2), (0, 128, 255), 2)
+                    ccx = int((x1 + x2) / 2)
+                    ccy = int((y1 + y2) / 2)
+                    cv2.circle(orig, (ccx, ccy), 5, (0, 0, 255), -1)
+                    cv2.putText(orig, f'uav {conf:.2f}', (x1, max(12, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        except Exception:
+            pass
+
     if not detected:
         cv2.putText(orig, 'No UAV-like triangular/trapezoid shapes found', (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
@@ -238,16 +289,34 @@ def load_model():
     return None
 
 MODEL = load_model()
+CLF = joblib.load(CLF_FILE) if os.path.exists(CLF_FILE) else None
+REG = joblib.load(REG_FILE) if os.path.exists(REG_FILE) else None
+YOLO_MODEL = None
+try:
+    from ultralytics import YOLO
+    yolomodel_path = os.path.join(BASE_DIR, 'models', 'yolov8_best.pt')
+    if os.path.exists(yolomodel_path):
+        try:
+            YOLO_MODEL = YOLO(yolomodel_path)
+        except Exception:
+            YOLO_MODEL = None
+except Exception:
+    YOLO_MODEL = None
 
 def extract_hog_from_image(path, pixels=128):
-    img = cv2.imread(path)
+    # Accept either a file path or an ndarray image (BGR as from OpenCV)
+    if isinstance(path, np.ndarray):
+        img = path
+    else:
+        img = cv2.imread(path)
     if img is None:
         return None
+    # convert BGR to RGB and to grayscale
     if img.ndim == 3:
         img = color.rgb2gray(img[:, :, ::-1])
     from skimage.transform import resize
     img = resize(img, (pixels, pixels), anti_aliasing=True)
-    feat = hog(img, pixels_per_cell=(16,16), cells_per_block=(2,2), visualize=False, feature_vector=True)
+    feat = hog(img, pixels_per_cell=(16, 16), cells_per_block=(2, 2), visualize=False, feature_vector=True)
     return feat
 
 
@@ -409,4 +478,10 @@ def feedback():
 
 if __name__ == '__main__':
     init_db()
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    try:
+        app.run(host='0.0.0.0', port=port, debug=True)
+    except OSError:
+        # fallback to a different port if 5000 is in use
+        alt = port + 1
+        app.run(host='0.0.0.0', port=alt, debug=True)
