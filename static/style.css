@@ -6,3 +6,11 @@ form{margin:12px 0}
 .feedback{margin-top:8px}
 .feedback button{margin-right:8px}
 .note{color:#666;font-size:0.9rem}
+
+.nav-link{margin-left:12px;text-decoration:none;color:#2b6cb0}
+.upload-form{display:flex;gap:8px;align-items:center}
+.uploads-table{width:100%;border-collapse:collapse;margin-top:12px}
+.uploads-table th,.uploads-table td{border:1px solid #e6e6e6;padding:8px;text-align:left;vertical-align:middle}
+.uploads-table thead{background:#fafafa}
+.uploads-table img{display:block}
+

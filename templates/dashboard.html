@@ -8,13 +8,18 @@
   </head>
   <body>
     <div class="container">
-      <h1>Uploads Dashboard</h1>
-      <table>
+      <nav style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h1 style="margin:0">Uploads Dashboard</h1>
+        <div>
+          <a class="nav-link" href="/">Home</a>
+        </div>
+      </nav>
+      <table class="uploads-table">
         <thead><tr><th>Preview</th><th>Filename</th><th>Detected</th><th>Feedback</th><th>Actions</th></tr></thead>
         <tbody>
         {% for u in uploads %}
           <tr>
-            <td><img src="/processed/{{ u.processed_path }}" style="height:80px" /></td>
+            <td><img src="{{ url_for('processed_file', filename=u.processed_path) }}" style="height:80px" /></td>
             <td>{{ u.filename }}</td>
             <td>{{ 'Yes' if u.detected else 'No' }}</td>
             <td>{% if u.feedback is none %}Unlabeled{% elif u.feedback==1 %}UAV{% else %}Not UAV{% endif %}</td>

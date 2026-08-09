@@ -8,33 +8,42 @@
   </head>
   <body>
     <div class="container">
-      <h1>UAV / Triangle Detector</h1>
-      <form action="/upload" method="post" enctype="multipart/form-data">
+      <nav style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h1 style="margin:0">UAV / Triangle Detector</h1>
+        <div>
+          <a class="nav-link" href="/">Home</a>
+          <a class="nav-link" href="/dashboard">Dashboard</a>
+        </div>
+      </nav>
+
+      <form action="/upload" method="post" enctype="multipart/form-data" class="upload-form">
         <input type="file" name="image" accept="image/*" required />
         <button type="submit">Upload & Analyze</button>
       </form>
 
       {% if processed_url %}
-      <h2>Result</h2>
-      <div class="result">
-        <img src="{{ processed_url }}" alt="processed image" />
-      </div>
+      <section>
+        <h2>Result</h2>
+        <div class="result">
+          <img src="{{ processed_url }}" alt="processed image" />
+        </div>
 
-      <div class="meta">
-        {% if detected_type %}
-        <p><strong>Detected shape:</strong> {{ detected_type }}</p>
-        {% endif %}
-      </div>
+        <div class="meta">
+          {% if detected_type %}
+          <p><strong>Detected shape:</strong> {{ detected_type }}</p>
+          {% endif %}
+        </div>
 
-      <form action="/feedback" method="post" class="feedback">
-        <input type="hidden" name="uid" value="{{ uid }}" />
-        <label>Was that a UAV?</label>
-        <button name="is_uav" value="yes">Yes</button>
-        <button name="is_uav" value="no">No</button>
-      </form>
+        <form action="/feedback" method="post" class="feedback">
+          <input type="hidden" name="uid" value="{{ uid }}" />
+          <label>Was that a UAV?</label>
+          <button name="is_uav" value="yes">Yes</button>
+          <button name="is_uav" value="no">No</button>
+        </form>
+      </section>
       {% endif %}
 
-      <p class="note">This tool uses simple shape heuristics (triangles/trapezoids) to find UAV-like objects and marks the polygon and center. Use feedback to reinforce the dataset.</p>
+      <p class="note">This tool uses simple shape heuristics (triangles/trapezoids) and optional ML to find UAV-like objects and marks the polygon and center. Use feedback to improve the model.</p>
     </div>
   </body>
   </html>
