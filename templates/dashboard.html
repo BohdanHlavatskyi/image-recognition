@@ -7,36 +7,49 @@
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
-    <div class="container">
-      <nav style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-        <h1 style="margin:0">Uploads Dashboard</h1>
-        <div>
+    <main class="app-shell">
+      <section class="hero-card hero-card-tight">
+        <div class="hero-copy">
+          <p class="eyebrow">Detection history</p>
+          <h1>Review previous uploads and correct labels from one place.</h1>
+          <p class="hero-text">The dashboard now reads like a gallery, with larger previews and clearer status chips instead of a compressed spreadsheet view.</p>
+        </div>
+        <div class="nav-row nav-row-right">
           <a class="nav-link" href="/">Home</a>
         </div>
-      </nav>
-      <table class="uploads-table">
-        <thead><tr><th>Preview</th><th>Filename</th><th>Detected</th><th>Feedback</th><th>Actions</th></tr></thead>
-        <tbody>
-        {% for u in uploads %}
-          <tr>
-            <td><img src="{{ url_for('processed_file', filename=u.processed_path) }}" style="height:80px" /></td>
-            <td>{{ u.filename }}</td>
-            <td>{{ 'Yes' if u.detected else 'No' }}</td>
-            <td>{% if u.feedback is none %}Unlabeled{% elif u.feedback==1 %}UAV{% else %}Not UAV{% endif %}</td>
-            <td>
-              <form action="/feedback" method="post" style="display:inline">
-                <input type="hidden" name="uid" value="{{ u.id }}" />
-                <button name="is_uav" value="yes">Mark UAV</button>
-              </form>
-              <form action="/feedback" method="post" style="display:inline">
-                <input type="hidden" name="uid" value="{{ u.id }}" />
-                <button name="is_uav" value="no">Mark Not UAV</button>
-              </form>
-            </td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Uploads</h2>
+          <span class="badge">{{ uploads|length }} items</span>
+        </div>
+
+        <div class="uploads-grid">
+          {% for u in uploads %}
+          <article class="upload-card">
+            <img src="{{ url_for('processed_file', filename=u.processed_path) }}" alt="Processed preview" />
+            <div class="upload-card-body">
+              <div class="upload-card-topline">
+                <strong class="filename">{{ u.filename }}</strong>
+                <span class="status-chip {% if u.detected %}status-yes{% else %}status-no{% endif %}">{{ 'Detected' if u.detected else 'Not detected' }}</span>
+              </div>
+              <p class="upload-feedback">{% if u.feedback is none %}Unlabeled{% elif u.feedback==1 %}UAV{% else %}Not UAV{% endif %}</p>
+              <div class="feedback-actions compact">
+                <form action="/feedback" method="post">
+                  <input type="hidden" name="uid" value="{{ u.id }}" />
+                  <button name="is_uav" value="yes">Mark UAV</button>
+                </form>
+                <form action="/feedback" method="post">
+                  <input type="hidden" name="uid" value="{{ u.id }}" />
+                  <button class="secondary" name="is_uav" value="no">Mark Not UAV</button>
+                </form>
+              </div>
+            </div>
+          </article>
+          {% endfor %}
+        </div>
+      </section>
+    </main>
   </body>
   </html>

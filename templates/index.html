@@ -1,49 +1,70 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>UAV Detector</title>
+    <title>Drone Detector</title>
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
-    <div class="container">
-      <nav style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-        <h1 style="margin:0">UAV / Triangle Detector</h1>
+    <main class="page-shell">
+      <header class="topbar">
         <div>
-          <a class="nav-link" href="/">Home</a>
-          <a class="nav-link" href="/dashboard">Dashboard</a>
+          <p class="label">Drone detection</p>
+          <h1>Drone Detector</h1>
         </div>
-      </nav>
+        <a class="dashboard-link" href="/dashboard">Dashboard</a>
+      </header>
 
-      <form action="/upload" method="post" enctype="multipart/form-data" class="upload-form">
-        <input type="file" name="image" accept="image/*" required />
-        <button type="submit">Upload & Analyze</button>
-      </form>
+      <section class="panel">
+        <div class="upload-box">
+          <h2>Upload image</h2>
+          <p>Choose a photo to detect drones and highlight triangular targets.</p>
 
-      {% if processed_url %}
-      <section>
-        <h2>Result</h2>
-        <div class="result">
-          <img src="{{ processed_url }}" alt="processed image" />
+          {% with messages = get_flashed_messages() %}
+          {% if messages %}
+            <div class="flash-list">
+              {% for message in messages %}
+              <div class="flash-message">{{ message }}</div>
+              {% endfor %}
+            </div>
+          {% endif %}
+          {% endwith %}
+
+          <form action="/upload" method="post" enctype="multipart/form-data" class="upload-form">
+            <input type="file" name="image" accept="image/*" required />
+            <button type="submit">Detect</button>
+          </form>
         </div>
 
-        <div class="meta">
-          {% if detected_type %}
-          <p><strong>Detected shape:</strong> {{ detected_type }}</p>
+        <div class="result-box">
+          {% if processed_url %}
+            <div class="result-header">
+              <h3>Detection result</h3>
+              {% if detected_type %}
+                <span class="tag">{{ detected_type }}</span>
+              {% endif %}
+            </div>
+            <img src="{{ processed_url }}" alt="Processed detection" />
+
+            {% if uid %}
+            <form action="/feedback" method="post" class="feedback-form">
+              <input type="hidden" name="uid" value="{{ uid }}" />
+              <label>Was that a UAV?</label>
+              <div class="feedback-actions">
+                <button type="submit" name="is_uav" value="yes">Yes</button>
+                <button type="submit" class="secondary" name="is_uav" value="no">No</button>
+              </div>
+            </form>
+            {% endif %}
+          {% else %}
+            <div class="empty-state">
+              <div class="empty-visual"></div>
+              <p>Upload an image to see the drone detection overlay here.</p>
+            </div>
           {% endif %}
         </div>
-
-        <form action="/feedback" method="post" class="feedback">
-          <input type="hidden" name="uid" value="{{ uid }}" />
-          <label>Was that a UAV?</label>
-          <button name="is_uav" value="yes">Yes</button>
-          <button name="is_uav" value="no">No</button>
-        </form>
       </section>
-      {% endif %}
-
-      <p class="note">This tool uses simple shape heuristics (triangles/trapezoids) and optional ML to find UAV-like objects and marks the polygon and center. Use feedback to improve the model.</p>
-    </div>
+    </main>
   </body>
-  </html>
+</html>
