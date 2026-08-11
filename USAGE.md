@@ -14,7 +14,9 @@ pip install -r requirements.txt
 python app.py
 ```
 
-3. Open http://localhost:5000 in your browser, upload an image, and use the feedback buttons to label results for reinforcement.
+3. Open http://localhost:8080 in your browser (or the forwarded preview port), upload an image, and use the feedback buttons to label results for reinforcement.
+
+If 8080 is already in use, the app automatically picks the next free port.
 
 Notes:
 - Uploaded images are stored in `uploads/` and processed images in `processed/`.
@@ -59,6 +61,17 @@ python yolo_train.py --epochs 30 --imgsz 640 --batch 8
 
 4. After training, copy the best weights into `models/yolov8_best.pt` so the app will use them for inference.
 
+Winged-UAV dataset sources (free and popular):
+- DOTA-v2.0: https://captain-whu.github.io/DOTA/dataset.html
+- VisDrone: https://github.com/VisDrone/VisDrone-Dataset
+- UAVDT: https://sites.google.com/site/dstunofficial/
+- AU-AIR: https://github.com/auair/auair
+
+Labeling policy for this project:
+- Keep only winged UAV silhouettes: delta-wing and rectangular-wing shapes.
+- Ignore rotorcraft / propeller drones.
+- Use a binary or class label of winged_uav versus background to reduce confusion.
+
 Notes:
 - Training YOLOv8 is resource intensive; use a GPU-enabled environment (Colab, AWS/GCP, or local GPU).
-- You can also download and convert public UAV datasets to YOLO format and place them under `yolo_data` before training.
+- Convert public aerial-object datasets to YOLO format and place them under `yolo_data` before training.

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Simple dataset download helper for UAV datasets
-# This script does NOT automatically download the full DOTA/VisDrone releases (they are large).
-# Instead it prepares directories and offers commands to fetch sample subsets or full archives.
+# Dataset helper for winged UAV training.
+# This project focuses on winged drone silhouettes (delta / rectangular) rather than multirotor or propeller drones.
+# Public free datasets that are commonly used for this task are DOTA-v2.0, VisDrone, UAVDT, and AU-AIR.
+# Full archives are large, so this script only creates directories and prints the official source links.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RAW_DIR="$ROOT_DIR/data/raw"
@@ -12,8 +13,9 @@ mkdir -p "$RAW_DIR"
 echo "Data root: $RAW_DIR"
 
 usage(){
-  echo "Usage: $0 [visdrone|dota|uavdt|all] [--sample]"
+  echo "Usage: $0 [visdrone|dota|uavdt|auair|all] [--sample]"
   echo "  --sample: download a small sample (when available) instead of full archives"
+  echo "  Winged UAV training sources: DOTA-v2.0, VisDrone, UAVDT, AU-AIR"
   exit 1
 }
 
@@ -59,4 +61,11 @@ if [[ "$TARGET" == "uavdt" || "$TARGET" == "all" ]]; then
   fi
 fi
 
-echo "Download preparation complete. Read scripts/README_datasets.md for next steps."
+if [[ "$TARGET" == "auair" || "$TARGET" == "all" ]]; then
+  echo "Preparing AU-AIR download..."
+  mkdir -p "$RAW_DIR/AU-AIR"
+  echo "Official source: https://github.com/auair/auair"
+  echo "This dataset is helpful for drone imagery but should be filtered to winged UAV silhouettes when training this detector."
+fi
+
+echo "Download preparation complete. Prefer DOTA-v2.0, VisDrone, UAVDT, and AU-AIR for winged-UAV training, and filter out rotorcraft / propeller targets before labeling."

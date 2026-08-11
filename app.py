@@ -1,6 +1,7 @@
 import os
 import io
 import json
+import socket
 import sqlite3
 from datetime import datetime
 from uuid import uuid4
@@ -107,7 +108,7 @@ def detect_shapes_and_draw(img_path, out_path):
         hull_area = cv2.contourArea(hull)
         solidity = float(area) / hull_area if hull_area > 0 else 0
 
-        # Accept triangles and quads (approx triangle/trapezoid)
+        # Accept triangular and quad-like shapes, which are common for winged UAV silhouettes.
         if len(pts) in (3, 4):
             M = cv2.moments(approx)
             if M['m00'] == 0:
@@ -119,10 +120,8 @@ def detect_shapes_and_draw(img_path, out_path):
             # color contrast: compare mean LAB color inside contour vs outside bbox
             mask = np.zeros((h, w), dtype=np.uint8)
             cv2.drawContours(mask, [approx], -1, 255, -1)
-            # convert to LAB
             lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
             mean_in = cv2.mean(lab, mask=mask)[:3]
-            # outside: bounding box area excluding mask
             x1 = x
             y1 = y
             x2 = min(w, x + cw)
@@ -134,48 +133,15 @@ def detect_shapes_and_draw(img_path, out_path):
             else:
                 inv_mask = cv2.bitwise_not(mask_roi)
                 mean_out = cv2.mean(roi, mask=inv_mask)[:3]
-            # perceptual distance in LAB
             color_contrast = math.sqrt(sum((mean_in[i] - mean_out[i]) ** 2 for i in range(3)))
 
-            # scoring: area, solidity (prefer solid shapes), extent, color contrast, location
             score = area * (0.8 + 0.4 * solidity) * (0.8 + 0.4 * extent) * (1.0 + color_contrast / 50.0)
             if cy < h * 0.6:
                 score *= 1.25
             if sky_mask[cy, min(max(cx, 0), w - 1)] > 0:
                 score *= 1.2
 
-            # propeller detection: look for multiple short lines radiating from center
-            propeller_score = 0.0
-            try:
-                pad = int(max(cw, ch) * 0.9)
-                sx = max(0, cx - pad)
-                sy = max(0, cy - pad)
-                ex = min(w, cx + pad)
-                ey = min(h, cy + pad)
-                window = edges_skied[sy:ey, sx:ex]
-                # detect lines
-                lines = cv2.HoughLinesP(window, 1, np.pi / 180, threshold=30, minLineLength=8, maxLineGap=6)
-                if lines is not None:
-                    angles = []
-                    for l in lines:
-                        x3, y3, x4, y4 = l[0]
-                        # transform to image coords
-                        mx = (x3 + x4) / 2 + sx
-                        my = (y3 + y4) / 2 + sy
-                        # distance from center
-                        dist = math.hypot(mx - cx, my - cy)
-                        if dist > max(cw, ch) * 1.2:
-                            continue
-                        angle = math.degrees(math.atan2((y4 - y3), (x4 - x3)))
-                        angles.append(angle)
-                    if angles:
-                        # cluster unique angles (quantize)
-                        q = set(int(a / 20.0) for a in angles)
-                        propeller_score = len(q)
-            except Exception:
-                propeller_score = 0.0
-
-            candidates.append({'pts': pts.tolist(), 'area': area, 'center': (cx, cy), 'score': score, 'sides': len(pts), 'solidity': solidity, 'extent': extent, 'bbox': [x, y, cw, ch], 'color_contrast': color_contrast, 'propeller_score': propeller_score})
+            candidates.append({'pts': pts.tolist(), 'area': area, 'center': (cx, cy), 'score': score, 'sides': len(pts), 'solidity': solidity, 'extent': extent, 'bbox': [x, y, cw, ch], 'color_contrast': color_contrast})
 
     detected = False
     chosen = None
@@ -221,21 +187,16 @@ def detect_shapes_and_draw(img_path, out_path):
         cx, cy = chosen['center']
         cv2.circle(orig, (cx, cy), 6, (0, 0, 255), -1)
         cv2.drawMarker(orig, (cx, cy), (255, 0, 0), markerType=cv2.MARKER_CROSS, markerSize=12, thickness=2)
-        # classify final shape
         shape_type = 'unknown'
-        if chosen.get('propeller_score', 0) >= 3:
-            shape_type = 'propeller'
-        elif chosen.get('sides') == 3:
-            shape_type = 'triangle'
+        if chosen.get('sides') == 3:
+            shape_type = 'delta'
         elif chosen.get('sides') == 4:
-            # aspect
             bx, by, bw, bh = chosen.get('bbox', [0, 0, 0, 0])
             ar = float(bw) / bh if bh > 0 else 0
             if ar < 0.6 or ar > 1.7:
                 shape_type = 'rectangle'
             else:
-                shape_type = 'quadrilateral'
-        # draw label
+                shape_type = 'winged_uav'
         label = f"{shape_type} ({chosen.get('score'):.0f})"
         cv2.putText(orig, label, (max(5, cx - 20), max(20, cy - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
@@ -263,7 +224,7 @@ def detect_shapes_and_draw(img_path, out_path):
             pass
 
     if not detected:
-        cv2.putText(orig, 'No UAV-like triangular/trapezoid shapes found', (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        cv2.putText(orig, 'No winged UAV-like delta or rectangle shapes found', (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
     cv2.imwrite(out_path, orig)
 
@@ -358,12 +319,9 @@ def upload():
         conn.close()
 
         detected_type = chosen.get('shape_type') if chosen and 'shape_type' in chosen else None
-        # chosen may not have shape_type; compute from chosen heuristic
         if detected and not detected_type:
-            if chosen.get('propeller_score', 0) >= 3:
-                detected_type = 'propeller'
-            elif chosen.get('sides') == 3:
-                detected_type = 'triangle'
+            if chosen.get('sides') == 3:
+                detected_type = 'delta'
             elif chosen.get('sides') == 4:
                 detected_type = 'rectangle'
 
@@ -440,10 +398,8 @@ def api_detect():
     data_uri = image_file_to_data_uri(processed_path)
     detected_type = None
     if chosen:
-        if chosen.get('propeller_score', 0) >= 3:
-            detected_type = 'propeller'
-        elif chosen.get('sides') == 3:
-            detected_type = 'triangle'
+        if chosen.get('sides') == 3:
+            detected_type = 'delta'
         elif chosen.get('sides') == 4:
             detected_type = 'rectangle'
 
@@ -478,10 +434,31 @@ def feedback():
 
 if __name__ == '__main__':
     init_db()
-    port = int(os.environ.get('PORT', 5000))
-    try:
-        app.run(host='0.0.0.0', port=port, debug=True)
-    except OSError:
-        # fallback to a different port if 5000 is in use
-        alt = port + 1
-        app.run(host='0.0.0.0', port=alt, debug=True)
+    preferred_ports = []
+    env_port = os.environ.get('PORT')
+    if env_port:
+        try:
+            preferred_ports.append(int(env_port))
+        except ValueError:
+            pass
+    preferred_ports.extend([8080, 3000, 5000, 5001, 8000, 8081])
+
+    selected_port = None
+    seen = set()
+    for port in preferred_ports:
+        if port in seen:
+            continue
+        seen.add(port)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(('0.0.0.0', port))
+                selected_port = port
+                break
+            except OSError:
+                continue
+
+    if selected_port is None:
+        selected_port = 8080
+
+    app.run(host='0.0.0.0', port=selected_port, debug=False, use_reloader=False)

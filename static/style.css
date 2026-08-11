@@ -171,6 +171,22 @@ button.secondary {
   letter-spacing: 0.08em;
 }
 
+.tag.success {
+  background: #eafaf1;
+  color: #1e7d4d;
+  border-color: #cdeed8;
+}
+
+.tag.danger {
+  background: #fff1ee;
+  color: #b63d2d;
+  border-color: #f2d1ca;
+}
+
+.hidden {
+  display: none !important;
+}
+
 .result-box img {
   width: 100%;
   border-radius: 12px;
@@ -192,6 +208,47 @@ button.secondary {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.form-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.status-box {
+  min-height: 22px;
+  margin-top: 8px;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 0.92rem;
+  color: var(--muted);
+  background: #f4f7fb;
+  border: 1px solid transparent;
+}
+
+.status-box.info {
+  background: #eef4ff;
+  border-color: #d9e5ff;
+  color: var(--text);
+}
+
+.status-box.success {
+  background: #ebf9ef;
+  border-color: #cdeed8;
+  color: #1e7d4d;
+}
+
+.status-box.warning {
+  background: #fff7e7;
+  border-color: #f5e1a8;
+  color: #8f6300;
+}
+
+.status-box.error {
+  background: #fff1ee;
+  border-color: #f2d1ca;
+  color: #b63d2d;
 }
 
 .empty-state {

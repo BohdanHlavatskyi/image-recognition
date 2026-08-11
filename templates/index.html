@@ -3,23 +3,23 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Drone Detector</title>
+    <title>Winged UAV Detector</title>
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
     <main class="page-shell">
       <header class="topbar">
         <div>
-          <p class="label">Drone detection</p>
-          <h1>Drone Detector</h1>
+          <p class="label">Winged UAV detection</p>
+          <h1>Winged UAV Detector</h1>
         </div>
         <a class="dashboard-link" href="/dashboard">Dashboard</a>
       </header>
 
-      <section class="panel">
+      <section id="visual-app" class="panel visual-app">
         <div class="upload-box">
           <h2>Upload image</h2>
-          <p>Choose a photo to detect drones and highlight triangular targets.</p>
+          <p>Choose a photo to detect winged UAVs by delta or rectangular silhouette.</p>
 
           {% with messages = get_flashed_messages() %}
           {% if messages %}
@@ -31,40 +31,132 @@
           {% endif %}
           {% endwith %}
 
-          <form action="/upload" method="post" enctype="multipart/form-data" class="upload-form">
-            <input type="file" name="image" accept="image/*" required />
-            <button type="submit">Detect</button>
+          <form id="upload-form" action="/upload" method="post" enctype="multipart/form-data" class="upload-form">
+            <input id="image-input" type="file" name="image" accept="image/*" required />
+            <div class="form-actions">
+              <button id="detect-button" type="submit">Detect</button>
+              <button id="clear-button" type="button" class="secondary">Clear</button>
+            </div>
+            <div id="status-box" class="status-box" role="status" aria-live="polite"></div>
           </form>
         </div>
 
         <div class="result-box">
-          {% if processed_url %}
-            <div class="result-header">
-              <h3>Detection result</h3>
-              {% if detected_type %}
-                <span class="tag">{{ detected_type }}</span>
-              {% endif %}
-            </div>
-            <img src="{{ processed_url }}" alt="Processed detection" />
+          <div class="result-header">
+            <h3>Detection result</h3>
+            <span id="result-tag" class="tag hidden">Waiting</span>
+          </div>
 
-            {% if uid %}
-            <form action="/feedback" method="post" class="feedback-form">
-              <input type="hidden" name="uid" value="{{ uid }}" />
-              <label>Was that a UAV?</label>
-              <div class="feedback-actions">
-                <button type="submit" name="is_uav" value="yes">Yes</button>
-                <button type="submit" class="secondary" name="is_uav" value="no">No</button>
-              </div>
-            </form>
-            {% endif %}
-          {% else %}
-            <div class="empty-state">
-              <div class="empty-visual"></div>
-              <p>Upload an image to see the drone detection overlay here.</p>
+          <div id="empty-state" class="empty-state">
+            <div class="empty-visual"></div>
+            <p>Upload an image to see the winged UAV detection overlay here. We focus on delta and rectangular silhouettes.</p>
+          </div>
+
+          <img id="result-image" class="hidden" alt="Processed detection" />
+
+          <form id="feedback-form" action="/feedback" method="post" class="feedback-form hidden">
+            <input type="hidden" name="uid" value="" />
+            <label>Was that a winged UAV?</label>
+            <div class="feedback-actions">
+              <button type="submit" name="is_uav" value="yes">Yes</button>
+              <button type="submit" class="secondary" name="is_uav" value="no">No</button>
             </div>
-          {% endif %}
+          </form>
         </div>
       </section>
     </main>
+
+    <script>
+      (function () {
+        const form = document.getElementById('upload-form');
+        const imageInput = document.getElementById('image-input');
+        const detectButton = document.getElementById('detect-button');
+        const clearButton = document.getElementById('clear-button');
+        const statusBox = document.getElementById('status-box');
+        const emptyState = document.getElementById('empty-state');
+        const resultImage = document.getElementById('result-image');
+        const feedbackForm = document.getElementById('feedback-form');
+        const resultTag = document.getElementById('result-tag');
+
+        function setStatus(message, tone) {
+          if (!message) {
+            statusBox.textContent = '';
+            statusBox.className = 'status-box';
+            return;
+          }
+          statusBox.textContent = message;
+          statusBox.className = 'status-box ' + (tone || 'info');
+        }
+
+        function resetResult() {
+          emptyState.classList.remove('hidden');
+          resultImage.classList.add('hidden');
+          resultImage.removeAttribute('src');
+          feedbackForm.classList.add('hidden');
+          feedbackForm.querySelector('input[name="uid"]').value = '';
+          resultTag.textContent = 'Waiting';
+          resultTag.classList.remove('success');
+          resultTag.classList.remove('danger');
+          resultTag.classList.add('hidden');
+          setStatus('', 'info');
+        }
+
+        function showResult(data) {
+          emptyState.classList.add('hidden');
+          resultImage.src = data.image_data_uri;
+          resultImage.classList.remove('hidden');
+          feedbackForm.classList.remove('hidden');
+          feedbackForm.querySelector('input[name="uid"]').value = data.id;
+
+          const label = data.detected ? (data.detected_type || 'UAV detected') : 'No UAV';
+          resultTag.textContent = label;
+          resultTag.classList.remove('hidden');
+          resultTag.classList.toggle('success', Boolean(data.detected));
+          resultTag.classList.toggle('danger', !data.detected);
+          setStatus(data.detected ? 'Detection finished successfully.' : 'No winged UAV-like shape was detected.', data.detected ? 'success' : 'warning');
+        }
+
+        form.addEventListener('submit', async function (event) {
+          event.preventDefault();
+          const file = imageInput.files[0];
+          if (!file) {
+            setStatus('Please select an image first.', 'warning');
+            return;
+          }
+
+          detectButton.disabled = true;
+          setStatus('Detecting…', 'info');
+          resultTag.classList.add('hidden');
+
+          const payload = new FormData();
+          payload.append('image', file);
+
+          try {
+            const response = await fetch('/api/detect', {
+              method: 'POST',
+              body: payload
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+              throw new Error(data.error || 'Detection failed.');
+            }
+
+            showResult(data);
+          } catch (error) {
+            setStatus(error.message || 'Detection failed. Please try another image.', 'error');
+          } finally {
+            detectButton.disabled = false;
+          }
+        });
+
+        clearButton.addEventListener('click', function () {
+          form.reset();
+          resetResult();
+        });
+
+        resetResult();
+      })();
+    </script>
   </body>
 </html>
