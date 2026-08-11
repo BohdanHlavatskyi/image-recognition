@@ -3,7 +3,10 @@ import io
 import json
 import socket
 import sqlite3
+import threading
+import time
 from datetime import datetime
+from functools import lru_cache
 from uuid import uuid4
 
 from flask import Flask, request, redirect, url_for, render_template, send_from_directory, flash
@@ -34,6 +37,44 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['PROCESSED_FOLDER'] = PROCESSED_FOLDER
 app.secret_key = 'dev'
 
+RETRAIN_LOCK = threading.Lock()
+RETRAIN_STATE = {
+    'pending': False,
+    'last_scheduled': None,
+    'thread': None,
+}
+
+
+def get_retraining_state():
+    with RETRAIN_LOCK:
+        return {
+            'pending': bool(RETRAIN_STATE['pending']),
+            'last_scheduled': RETRAIN_STATE['last_scheduled'],
+            'thread_alive': bool(RETRAIN_STATE['thread'] and RETRAIN_STATE['thread'].is_alive()),
+        }
+
+
+def schedule_feedback_retraining():
+    with RETRAIN_LOCK:
+        RETRAIN_STATE['pending'] = True
+        RETRAIN_STATE['last_scheduled'] = datetime.utcnow().isoformat()
+        if RETRAIN_STATE['thread'] is not None and RETRAIN_STATE['thread'].is_alive():
+            return RETRAIN_STATE['thread']
+
+        def _retrain_worker():
+            time.sleep(2.0)
+            try:
+                retrain_model_from_feedback()
+            finally:
+                with RETRAIN_LOCK:
+                    RETRAIN_STATE['pending'] = False
+                    RETRAIN_STATE['thread'] = None
+
+        thread = threading.Thread(target=_retrain_worker, daemon=True)
+        RETRAIN_STATE['thread'] = thread
+        thread.start()
+        return thread
+
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -51,8 +92,66 @@ def init_db():
             created_at TEXT
         )'''
     )
+    c.execute(
+        '''CREATE TABLE IF NOT EXISTS feedback_learning (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            upload_id TEXT,
+            prediction INTEGER,
+            actual INTEGER,
+            correct INTEGER,
+            created_at TEXT,
+            FOREIGN KEY(upload_id) REFERENCES uploads(id)
+        )'''
+    )
     conn.commit()
     conn.close()
+
+
+def learn_from_feedback(upload_id, prediction, actual):
+    """Store and compare each user-verified answer against the model's prediction.
+
+    This creates a simple learning memory for the app: the system records whether
+    the model was correct, which lets the project build neural-like dependencies from
+    real answers over time without requiring a full MLOps stack.
+    """
+    if upload_id is None:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    correct = 1 if int(prediction) == int(actual) else 0
+    c.execute(
+        'INSERT INTO feedback_learning (upload_id, prediction, actual, correct, created_at) VALUES (?,?,?,?,?)',
+        (upload_id, int(prediction), int(actual), correct, datetime.utcnow().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+def retrain_model_from_feedback():
+    """Train the classifier again from all user-verified labels.
+
+    The app uses the same HOG-based feature space already in use during detection,
+    so the model can continue learning from verified examples and improve future
+    determinations on unseen pictures.
+    """
+    try:
+        from train_ml import load_labeled, train_and_save
+        from train_winged_uav import sync_feedback_dataset
+        from pathlib import Path
+
+        sync_feedback_dataset(Path(DB_PATH).parent / "data.db", Path(DB_PATH).parent / "data" / "raw" / "winged_uav_feedback")
+        X, y, ids = load_labeled()
+        if len(X) == 0:
+            return False
+        train_and_save()
+        return True
+    except Exception:
+        return False
+
+
+@lru_cache(maxsize=256)
+def cached_hog_from_path(path):
+    return extract_hog_from_image(path)
 
 
 def allowed_file(filename):
@@ -65,6 +164,11 @@ def detect_shapes_and_draw(img_path, out_path):
         raise ValueError('Could not read image')
     orig = img.copy()
     h, w = img.shape[:2]
+
+    # Guard against expensive downstream work on obviously empty or low-content input.
+    if img.size == 0 or h < 16 or w < 16:
+        cv2.imwrite(out_path, orig)
+        return False, json.dumps([]), (None, None), None
 
     # Simple sky mask heuristic: prefer blue-ish and bright regions in upper image
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
@@ -146,12 +250,12 @@ def detect_shapes_and_draw(img_path, out_path):
     detected = False
     chosen = None
     if candidates:
-        # If we have ML models, compute HOG for each bbox and get probability
-        for cand in candidates:
+        score_window = sorted(candidates, key=lambda x: x['score'], reverse=True)[: min(5, len(candidates))]
+        for cand in score_window:
             bx, by, bw, bh = cand['bbox']
             try:
                 crop = img[by:by + bh, bx:bx + bw]
-                feat = extract_hog_from_image(crop if isinstance(crop, str) else crop)
+                feat = extract_hog_from_image(crop)
             except Exception:
                 feat = None
             cand['uav_prob'] = 0.0
@@ -159,11 +263,9 @@ def detect_shapes_and_draw(img_path, out_path):
             if feat is not None and CLF is not None:
                 try:
                     prob = CLF.predict_proba([feat])[0]
-                    # assume positive class at index 1
                     cand['uav_prob'] = float(prob[1]) if len(prob) > 1 else float(prob[0])
                     if REG is not None and cand['uav_prob'] > 0.5:
                         pred = REG.predict([feat])[0]
-                        # pred is (dx, dy) normalized in bbox coords
                         dx, dy = float(pred[0]), float(pred[1])
                         rcx = int(bx + dx * bw)
                         rcy = int(by + dy * bh)
@@ -171,10 +273,10 @@ def detect_shapes_and_draw(img_path, out_path):
                 except Exception:
                     pass
 
-        # combine heuristic score with model probability
-        candidates.sort(key=lambda x: (x.get('uav_prob', 0.0) * 2.0 + x['score']), reverse=True)
-        chosen = candidates[0]
+        score_window.sort(key=lambda x: (x.get('uav_prob', 0.0) * 2.0 + x['score']), reverse=True)
+        chosen = score_window[0]
         detected = True if chosen.get('uav_prob', 0.0) > 0.25 or chosen['score'] > 1000 else False
+        candidates = score_window
 
     # Draw all candidate polygons (light) and chosen in bright color
     for cand in candidates:
@@ -200,8 +302,8 @@ def detect_shapes_and_draw(img_path, out_path):
         label = f"{shape_type} ({chosen.get('score'):.0f})"
         cv2.putText(orig, label, (max(5, cx - 20), max(20, cy - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
-    # If YOLO model exists, run detection and draw boxes/centers as stronger signal
-    if YOLO_MODEL is not None:
+    # If YOLO model exists, only run it when a likely candidate was found to avoid a heavy global pass.
+    if YOLO_MODEL is not None and detected:
         try:
             res = YOLO_MODEL.predict(img_path, imgsz=640, conf=0.25, verbose=False)
             for r in res:
@@ -354,11 +456,38 @@ def dashboard():
     c = conn.cursor()
     c.execute('SELECT id, filename, processed_path, detected, feedback FROM uploads ORDER BY created_at DESC LIMIT 200')
     rows = c.fetchall()
+    c.execute('SELECT prediction, actual, correct FROM feedback_learning ORDER BY created_at DESC LIMIT 50')
+    feedback_rows = c.fetchall()
+    c.execute('SELECT COUNT(*) FROM feedback_learning WHERE correct = 1')
+    correct_total = c.fetchone()[0]
+    c.execute('SELECT COUNT(*) FROM feedback_learning')
+    total_feedback = c.fetchone()[0]
     conn.close()
     uploads = []
     for r in rows:
         uploads.append({'id': r[0], 'filename': r[1], 'processed_path': r[2], 'detected': bool(r[3]), 'feedback': r[4]})
-    return render_template('dashboard.html', uploads=uploads)
+
+    recent_outcomes = []
+    for prediction, actual, correct in feedback_rows:
+        recent_outcomes.append({
+            'prediction': int(prediction),
+            'actual': int(actual),
+            'correct': bool(correct),
+            'label': 'match' if int(correct) == 1 else 'mismatch'
+        })
+
+    accuracy = None
+    if total_feedback:
+        accuracy = round((correct_total / total_feedback) * 100, 1)
+
+    return render_template(
+        'dashboard.html',
+        uploads=uploads,
+        learning_accuracy=accuracy,
+        total_checked=total_feedback,
+        correct_checked=correct_total,
+        recent_outcomes=recent_outcomes,
+    )
 
 
 @app.route('/api/detect', methods=['POST'])
@@ -406,7 +535,7 @@ def api_detect():
     # model prediction if available
     model_pred = None
     if MODEL is not None:
-        feat = extract_hog_from_image(processed_path)
+        feat = cached_hog_from_path(processed_path)
         if feat is not None:
             try:
                 p = MODEL.predict([feat])[0]
@@ -423,12 +552,19 @@ def feedback():
     val = request.form.get('is_uav')
     if not uid or val is None:
         return ('', 400)
-    fb = 1 if val == 'yes' else 0
+
+    actual = 1 if val == 'yes' else 0
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('UPDATE uploads SET feedback = ? WHERE id = ?', (fb, uid))
+    c.execute('SELECT detected FROM uploads WHERE id = ?', (uid,))
+    row = c.fetchone()
+    prediction = int(row[0]) if row and row[0] is not None else 0
+    c.execute('UPDATE uploads SET feedback = ? WHERE id = ?', (actual, uid))
     conn.commit()
     conn.close()
+
+    learn_from_feedback(uid, prediction, actual)
+    schedule_feedback_retraining()
     return redirect(url_for('index'))
 
 

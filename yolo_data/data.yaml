@@ -1,5 +1,6 @@
+nc: 1
 names:
-- uav
+- winged_uav
 path: /workspaces/image-recognition/yolo_data
 train: images/train
 val: images/val

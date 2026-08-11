@@ -15,13 +15,19 @@ PROCESSED = os.path.join(BASE, 'processed')
 MODEL_PATH = os.path.join(BASE, 'models', 'model.pkl')
 
 def extract_hog(path, pixels=128):
-    img = io.imread(path)
+    try:
+        img = io.imread(path)
+    except Exception:
+        return None
     if img is None:
         return None
     if img.ndim == 3:
         img = color.rgb2gray(img)
     img = resize(img, (pixels, pixels), anti_aliasing=True)
-    feat, _ = hog(img, pixels_per_cell=(16,16), cells_per_block=(2,2), visualize=True, feature_vector=True)
+    try:
+        feat, _ = hog(img, pixels_per_cell=(16,16), cells_per_block=(2,2), visualize=True, feature_vector=True)
+    except Exception:
+        return None
     return feat
 
 def load_labeled():
@@ -34,7 +40,7 @@ def load_labeled():
     y = []
     ids = []
     for uid, processed, fb in rows:
-        p = os.path.join(BASE, processed)
+        p = os.path.join(PROCESSED, os.path.basename(processed))
         if not os.path.exists(p):
             continue
         f = extract_hog(p)

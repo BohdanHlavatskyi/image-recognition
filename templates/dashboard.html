@@ -19,11 +19,37 @@
         </div>
       </section>
 
-      <section class="panel">
+      <section class="panel dashboard-panel">
         <div class="panel-header">
           <h2>Uploads</h2>
           <span class="badge">{{ uploads|length }} items</span>
         </div>
+
+        <div class="learning-summary">
+          <div class="metric-box">
+            <span class="metric-label">Model learning</span>
+            <strong>{{ learning_accuracy if learning_accuracy is not none else '0.0' }}%</strong>
+          </div>
+          <div class="metric-box">
+            <span class="metric-label">Prediction accuracy</span>
+            <strong>{{ correct_checked if correct_checked is not none else 0 }} / {{ total_checked if total_checked is not none else 0 }}</strong>
+          </div>
+        </div>
+
+        {% if recent_outcomes %}
+        <div class="recent-outcomes">
+          <h3>Recent prediction outcomes</h3>
+          <ul>
+            {% for outcome in recent_outcomes %}
+            <li class="outcome-item {% if outcome.correct %}match{% else %}mismatch{% endif %}">
+              <span>Prediction: {{ 'UAV' if outcome.prediction == 1 else 'Not UAV' }}</span>
+              <span>Actual: {{ 'UAV' if outcome.actual == 1 else 'Not UAV' }}</span>
+              <span>{{ 'Correct' if outcome.correct else 'Mismatch' }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
 
         <div class="uploads-grid">
           {% for u in uploads %}

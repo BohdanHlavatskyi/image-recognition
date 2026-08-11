@@ -318,6 +318,73 @@ button.secondary {
 
 .flash-list{display:grid;gap:10px;margin:14px 0}
 
+.dashboard-panel {
+  display: block;
+}
+
+.learning-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 18px 0 20px;
+}
+
+.metric-box {
+  background: #f6f9ff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.metric-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.metric-box strong {
+  font-size: clamp(1.2rem, 2.5vw, 1.8rem);
+}
+
+.recent-outcomes {
+  margin-bottom: 18px;
+}
+
+.recent-outcomes h3 {
+  margin: 0 0 12px;
+}
+
+.recent-outcomes ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.outcome-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+.outcome-item.match {
+  background: #edfdf3;
+  border-color: #cfead8;
+}
+
+.outcome-item.mismatch {
+  background: #fff4f2;
+  border-color: #f2d6cf;
+}
+
 .flash-message{
 	padding:12px 14px;
 	border-radius:14px;
